@@ -3,7 +3,8 @@ Cockpit API routes — Seneca pre-market watchlist surface.
 
 GET /api/cockpit/watchlist                           -> live ranked candidates
 GET /api/cockpit/watchlist/history?date=YYYY-MM-DD  -> historical candidates
-GET /api/cockpit/levels/<ticker>?date=YYYY-MM-DD    -> full S/R levels (VWAP + premarket H/L)
+GET /api/cockpit/levels/<ticker>?date=YYYY-MM-DD    -> quick S/R levels (legacy, no chart data)
+GET /api/cockpit/context/<ticker>?date=YYYY-MM-DD   -> full context: candles + levels + bias
 """
 
 from datetime import date, timedelta
@@ -112,4 +113,33 @@ def get_levels(ticker: str):
         })
     except Exception as e:
         logger.error("Cockpit levels error for %s: %s", ticker, e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@cockpit_blp.route("/context/<ticker>", methods=["GET"])
+def get_context(ticker: str):
+    """
+    Full chart context: 1-min candles (4am ET) + structured S/R levels + bias.
+
+    Query params:
+        date  (optional) YYYY-MM-DD — omit for live/today
+    """
+    ticker = ticker.upper().strip()
+    if not ticker:
+        return jsonify({"success": False, "error": "ticker required"}), 400
+
+    date_str = (request.args.get("date") or "").strip() or None
+    live = date_str is None
+
+    try:
+        from app.services.seneca.context import get_context as _get_context
+        ctx = _get_context(ticker, date_str=date_str, live=live)
+        if not ctx:
+            return jsonify({
+                "success": False,
+                "error": f"No context data available for {ticker}",
+            }), 404
+        return jsonify({"success": True, "data": ctx})
+    except Exception as e:
+        logger.error("Cockpit context error for %s: %s", ticker, e)
         return jsonify({"success": False, "error": str(e)}), 500
