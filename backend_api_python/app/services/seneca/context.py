@@ -202,9 +202,13 @@ def get_context(ticker: str, date_str: Optional[str] = None, live: bool = False)
         return {}
 
     if live or not date_str:
-        target = datetime.now(tz=timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        now_utc = datetime.now(tz=timezone.utc)
+        wd = now_utc.weekday()
+        if wd == 5:    # Saturday → Friday
+            now_utc -= timedelta(days=1)
+        elif wd == 6:  # Sunday → Friday
+            now_utc -= timedelta(days=2)
+        target = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     else:
         try:
             target = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
