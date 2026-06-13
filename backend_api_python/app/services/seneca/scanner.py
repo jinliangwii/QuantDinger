@@ -27,6 +27,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
@@ -270,6 +271,51 @@ def _get_float(ticker: str, cache: dict) -> tuple:
     return 0, True
 
 
+# ── Parallel float fetch ──────────────────────────────────────────────────────
+
+def _fetch_floats_parallel(symbols: list, cache: dict) -> dict:
+    """
+    Returns {sym: (float_shares, is_stale)} for all symbols.
+    Cache hits are returned immediately; misses are fetched in parallel (8 threads).
+    Updates cache in-place for any new fetches.
+    """
+    results = {}
+    to_fetch = []
+
+    for sym in symbols:
+        entry = cache.get(sym, {})
+        if not _is_stale(entry) and "float_shares" in entry:
+            results[sym] = (int(entry["float_shares"]), False)
+        else:
+            to_fetch.append(sym)
+
+    if not to_fetch:
+        return results
+
+    def _fetch_one(sym):
+        return sym, _fetch_float_finnhub(sym) or _fetch_float_finviz(sym)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_fetch_one, sym): sym for sym in to_fetch}
+        for future in as_completed(futures):
+            sym = futures[future]
+            try:
+                _, shares = future.result(timeout=20)
+            except Exception as e:
+                logger.debug("Parallel float failed for %s: %s", sym, e)
+                shares = None
+
+            if shares:
+                cache[sym] = {"float_shares": shares, "fetched_at": date_type.today().isoformat()}
+                results[sym] = (shares, False)
+            else:
+                # Fall back to stale cached value if present
+                stale_val = int(cache.get(sym, {}).get("float_shares", 0))
+                results[sym] = (stale_val, True)
+
+    return results
+
+
 # ── Live path ─────────────────────────────────────────────────────────────────
 
 def _live_screen() -> list:
@@ -307,9 +353,8 @@ def _live_screen() -> list:
     except Exception as e:
         logger.warning("snapshots fetch failed (continuing without): %s", e)
 
-    float_cache = _load_float_cache()
-    candidates = []
-
+    # Pass 1 — filter on all non-float criteria, collect survivors
+    pre_candidates = []
     for g in gainers:
         sym = g.get("symbol", "")
         if not sym:
@@ -324,14 +369,12 @@ def _live_screen() -> list:
         prev = snap.get("prevDailyBar") or {}
         latest_trade = snap.get("latestTrade") or {}
 
-        # movers includes price; snapshot refines it
         price = float(
             latest_trade.get("p") or daily.get("c") or daily.get("o") or g.get("price") or 0
         )
         if not PRICE_MIN <= price <= PRICE_MAX:
             continue
 
-        # Volume comes from snapshot — movers endpoint doesn't include it
         today_vol = int(daily.get("v") or 0)
         if today_vol < PREMARKET_VOL_MIN:
             continue
@@ -341,20 +384,37 @@ def _live_screen() -> list:
         if rvol < RVOL_MIN:
             continue
 
-        float_shares, stale = _get_float(sym, float_cache)
+        pre_candidates.append({
+            "sym": sym, "gap_pct": gap_pct, "rvol": rvol,
+            "price": price, "today_vol": today_vol,
+        })
+
+    if not pre_candidates:
+        return []
+
+    # Pass 2 — fetch all floats in parallel (cache hits are free)
+    float_cache = _load_float_cache()
+    float_data = _fetch_floats_parallel([c["sym"] for c in pre_candidates], float_cache)
+
+    # Pass 3 — apply float filter, score, build Candidate list
+    candidates = []
+    for item in pre_candidates:
+        sym = item["sym"]
+        float_shares, stale = float_data.get(sym, (0, True))
+
         if float_shares > 0:
             float_m = float_shares / 1_000_000
             if not FLOAT_MIN_M <= float_m <= FLOAT_MAX_M:
                 continue
 
-        sc, comps = _score(gap_pct, rvol, float_shares or 5_000_000)
+        sc, comps = _score(item["gap_pct"], item["rvol"], float_shares or 5_000_000)
         candidates.append(Candidate(
             ticker=sym,
-            gap_pct=gap_pct,
-            rvol=round(rvol, 2),
-            premarket_vol=today_vol,
+            gap_pct=item["gap_pct"],
+            rvol=round(item["rvol"], 2),
+            premarket_vol=item["today_vol"],
             float_shares=float_shares,
-            price=price,
+            price=item["price"],
             score=sc,
             score_components=comps,
             float_stale=stale,
