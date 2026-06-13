@@ -35,6 +35,7 @@ _PREFIX_TAGS: list[tuple[str, str]] = [
     ("/api/billing", "Billing"),
     ("/api/quick-trade", "QuickTrade"),
     ("/api/experiment", "Experiment"),
+    ("/api/cockpit", "Cockpit"),
 ]
 
 
@@ -74,6 +75,7 @@ def register_human_blueprints(api: Api) -> None:
     from app.routes.billing import billing_blp
     from app.routes.quick_trade import quick_trade_blp
     from app.routes.experiment import experiment_blp
+    from app.routes.cockpit import cockpit_blp
 
     registrations: list[tuple] = [
         (health_blp, ""),
@@ -99,6 +101,7 @@ def register_human_blueprints(api: Api) -> None:
         (billing_blp, "/api/billing"),
         (quick_trade_blp, "/api/quick-trade"),
         (experiment_blp, "/api/experiment"),
+        (cockpit_blp, "/api/cockpit"),
     ]
 
     for blp, prefix in registrations:

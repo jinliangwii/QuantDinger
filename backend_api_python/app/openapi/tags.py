@@ -22,6 +22,7 @@ QUICK_TRADE = "QuickTrade"
 IBKR = "IBKR"
 ALPACA = "Alpaca"
 MT5 = "MT5"
+COCKPIT = "Cockpit"
 
 ALL_TAGS = [
     {"name": HEALTH, "description": "Liveness and API metadata (Public)"},
@@ -46,4 +47,5 @@ ALL_TAGS = [
     {"name": IBKR, "description": "Interactive Brokers adapter (Internal)"},
     {"name": ALPACA, "description": "Alpaca adapter (Internal)"},
     {"name": MT5, "description": "MetaTrader 5 adapter (Internal)"},
+    {"name": COCKPIT, "description": "Seneca pre-market watchlist (Internal)"},
 ]
