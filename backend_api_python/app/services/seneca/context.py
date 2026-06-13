@@ -21,6 +21,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from app.services.seneca.patterns import detect_patterns
+
 logger = logging.getLogger(__name__)
 
 # ── Colour palette ────────────────────────────────────────────────────────────
@@ -255,6 +257,7 @@ def _get_context_daily(ticker: str, client, target: datetime) -> dict:
         "bias":            _bias(current, None, pdh, pdc, pdl, 0.0, 0.0),
         "session_open_ms": 0,
         "current_price":   current,
+        "patterns":       [],
     }
 
 
@@ -438,6 +441,7 @@ def get_context(ticker: str, date_str: Optional[str] = None,
         "bias":            _bias(current, latest_vwap, pdh, pdc, pdl, pm_high, pm_low),
         "session_open_ms": session_open_ms,
         "current_price":   current,
+        "patterns":        detect_patterns(candles, timeframe, live),
     }
     _CTX_CACHE[cache_key] = (_time.time(), result)
     return result
