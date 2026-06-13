@@ -258,6 +258,23 @@ def _get_context_daily(ticker: str, client, target: datetime) -> dict:
     }
 
 
+# ── In-memory cache ───────────────────────────────────────────────────────────
+import time as _time
+
+_CTX_CACHE: dict = {}
+_LIVE_TTL  = 300   # 5 min during market hours (intraday bars change slowly)
+_HIST_TTL  = 7200  # 2 h for historical / market-closed data
+
+
+def _market_is_open() -> bool:
+    now = datetime.now(tz=timezone.utc)
+    if now.weekday() >= 5:
+        return False
+    off = -4 if (3 < now.month < 11) else -5
+    et_total = (now.hour + off) * 60 + now.minute
+    return 9 * 60 + 30 <= et_total < 16 * 60
+
+
 # ── Public entry ──────────────────────────────────────────────────────────────
 
 def get_context(ticker: str, date_str: Optional[str] = None,
@@ -275,6 +292,15 @@ def get_context(ticker: str, date_str: Optional[str] = None,
     if not api_key or not secret:
         logger.error("Alpaca credentials not set")
         return {}
+
+    # ── Cache check (before any Alpaca call) ──────────────────────────────────
+    is_live = live or not date_str
+    ttl = _LIVE_TTL if (is_live and _market_is_open()) else _HIST_TTL
+    cache_key = (ticker, date_str or "live", timeframe)
+    cached = _CTX_CACHE.get(cache_key)
+    if cached and (_time.time() - cached[0]) < ttl:
+        logger.debug("context cache hit: %s %s %s", ticker, date_str, timeframe)
+        return cached[1]
 
     if live or not date_str:
         now_utc = datetime.now(tz=timezone.utc)
@@ -403,7 +429,7 @@ def get_context(ticker: str, date_str: Optional[str] = None,
     levels.extend(_round_dollars(current, structural))
     levels.sort(key=lambda l: l["price"], reverse=True)
 
-    return {
+    result = {
         "ticker":          ticker,
         "date":            target.date().isoformat(),
         "timeframe":       timeframe,
@@ -413,3 +439,5 @@ def get_context(ticker: str, date_str: Optional[str] = None,
         "session_open_ms": session_open_ms,
         "current_price":   current,
     }
+    _CTX_CACHE[cache_key] = (_time.time(), result)
+    return result

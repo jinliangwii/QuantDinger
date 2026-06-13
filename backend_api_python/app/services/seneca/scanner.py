@@ -579,6 +579,42 @@ def _historical_screen(date_str: str) -> list:
     return sorted(candidates, key=lambda c: c.score, reverse=True)
 
 
+# ── In-memory cache ───────────────────────────────────────────────────────────
+# Key: date_str (YYYY-MM-DD) → (fetched_at: float, results: list)
+# Market-closed data is immutable for that date → never expires mid-session.
+# Live (market open) data expires after 2 min so scanner refreshes naturally.
+
+import time as _time
+
+_SCAN_CACHE: dict = {}
+_LIVE_TTL  = 120   # seconds — match the frontend auto-refresh interval
+_HIST_TTL  = 3600  # seconds — historical data is static; keep for 1h
+
+
+def _last_trading_day_str() -> str:
+    from datetime import date, timedelta
+    d = date.today()
+    if d.weekday() == 5:
+        d -= timedelta(days=1)
+    elif d.weekday() == 6:
+        d -= timedelta(days=2)
+    return d.isoformat()
+
+
+def _market_is_open() -> bool:
+    """True only during regular US market hours (9:30–16:00 ET, weekdays)."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(tz=timezone.utc)
+    if now.weekday() >= 5:
+        return False
+    # rough ET offset check (good enough for cache TTL decisions)
+    off = -4 if (3 < now.month < 11) else -5
+    et_hour  = now.hour + off
+    et_min   = now.minute
+    et_total = et_hour * 60 + et_min
+    return 9 * 60 + 30 <= et_total < 16 * 60
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def screen(date: Optional[str] = None, live: bool = False) -> list:
@@ -586,6 +622,15 @@ def screen(date: Optional[str] = None, live: bool = False) -> list:
     screen(date=None, live=True)   -> live pre-market scan (Alpaca screener)
     screen(date="2025-06-01")      -> historical reconstruction for that date
     """
-    if live or date is None:
-        return _live_screen()
-    return _historical_screen(date)
+    is_live = live or date is None
+    cache_key = date or _last_trading_day_str()
+    ttl = _LIVE_TTL if (is_live and _market_is_open()) else _HIST_TTL
+
+    cached = _SCAN_CACHE.get(cache_key)
+    if cached and (_time.time() - cached[0]) < ttl:
+        logger.debug("scanner cache hit: %s (age %.0fs)", cache_key, _time.time() - cached[0])
+        return cached[1]
+
+    results = _live_screen() if is_live else _historical_screen(cache_key)
+    _SCAN_CACHE[cache_key] = (_time.time(), results)
+    return results
