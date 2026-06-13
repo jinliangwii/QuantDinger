@@ -34,6 +34,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from app.services.seneca.levels import quick_levels
+
 logger = logging.getLogger(__name__)
 
 # ── Criteria ──────────────────────────────────────────────────────────────────
@@ -114,6 +116,11 @@ class Candidate:
     score: float
     score_components: dict = field(default_factory=dict)
     float_stale: bool = False
+    # Context Layer (Layer 2) — quick levels, no extra API call
+    prev_high: float = 0.0
+    prev_low: float = 0.0
+    whole_dollar_above: float = 0.0
+    whole_dollar_below: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -126,6 +133,10 @@ class Candidate:
             "score": round(self.score, 4),
             "score_components": self.score_components,
             "float_stale": self.float_stale,
+            "prev_high": round(self.prev_high, 2),
+            "prev_low": round(self.prev_low, 2),
+            "whole_dollar_above": self.whole_dollar_above,
+            "whole_dollar_below": self.whole_dollar_below,
         }
 
 
@@ -383,6 +394,8 @@ def _live_screen() -> list:
         pre_candidates.append({
             "sym": sym, "gap_pct": gap_pct, "rvol": rvol,
             "price": price, "today_vol": today_vol,
+            "prev_high": float(prev.get("h") or 0),
+            "prev_low":  float(prev.get("l") or 0),
         })
 
     if not pre_candidates:
@@ -404,6 +417,7 @@ def _live_screen() -> list:
                 continue
 
         sc, comps = _score(item["gap_pct"], item["rvol"], float_shares or 5_000_000)
+        lvls = quick_levels(item["price"], item["prev_high"], item["prev_low"])
         candidates.append(Candidate(
             ticker=sym,
             gap_pct=item["gap_pct"],
@@ -414,6 +428,10 @@ def _live_screen() -> list:
             score=sc,
             score_components=comps,
             float_stale=stale,
+            prev_high=lvls["prev_high"],
+            prev_low=lvls["prev_low"],
+            whole_dollar_above=lvls["whole_dollar_above"],
+            whole_dollar_below=lvls["whole_dollar_below"],
         ))
 
     _save_float_cache(float_cache)
@@ -524,6 +542,8 @@ def _historical_screen(date_str: str) -> list:
             "rvol": rvol,
             "price": price,
             "premarket_vol": int(today_vol),
+            "prev_high": float(prev_bar.high or 0),
+            "prev_low":  float(prev_bar.low  or 0),
         })
 
     candidates = []
@@ -538,6 +558,7 @@ def _historical_screen(date_str: str) -> list:
 
         sc, comps = _score(item["gap_pct"], item["rvol"], float_for_scoring)
         comps["float_note"] = "historical_soft" if float_shares > FLOAT_MAX_M * 1_000_000 else "ok"
+        lvls = quick_levels(item["price"], item["prev_high"], item["prev_low"])
         candidates.append(Candidate(
             ticker=sym,
             gap_pct=item["gap_pct"],
@@ -548,6 +569,10 @@ def _historical_screen(date_str: str) -> list:
             score=sc,
             score_components=comps,
             float_stale=stale,
+            prev_high=lvls["prev_high"],
+            prev_low=lvls["prev_low"],
+            whole_dollar_above=lvls["whole_dollar_above"],
+            whole_dollar_below=lvls["whole_dollar_below"],
         ))
 
     _save_float_cache(float_cache)

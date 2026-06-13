@@ -1,8 +1,9 @@
 """
 Cockpit API routes — Seneca pre-market watchlist surface.
 
-GET /api/cockpit/watchlist                      -> live ranked candidates
+GET /api/cockpit/watchlist                           -> live ranked candidates
 GET /api/cockpit/watchlist/history?date=YYYY-MM-DD  -> historical candidates
+GET /api/cockpit/levels/<ticker>?date=YYYY-MM-DD    -> full S/R levels (VWAP + premarket H/L)
 """
 
 from datetime import date, timedelta
@@ -74,4 +75,41 @@ def get_watchlist_history():
         })
     except Exception as e:
         logger.error("Cockpit history error: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@cockpit_blp.route("/levels/<ticker>", methods=["GET"])
+def get_levels(ticker: str):
+    """
+    Full S/R levels for a ticker — VWAP, pre-market H/L, prev-day H/L, whole-dollar.
+
+    Query params:
+        date  (optional) YYYY-MM-DD — omit for live/today
+    """
+    ticker = ticker.upper().strip()
+    if not ticker:
+        return jsonify({"success": False, "error": "ticker required"}), 400
+
+    date_str = (request.args.get("date") or "").strip() or None
+    live = date_str is None
+
+    try:
+        from app.services.seneca.levels import get_levels as _get_levels
+        levels = _get_levels(ticker, date_str=date_str, live=live)
+        if not levels:
+            return jsonify({
+                "success": False,
+                "error": f"No data available for {ticker}",
+            }), 404
+        return jsonify({
+            "success": True,
+            "data": {
+                "ticker": ticker,
+                "date": date_str or _last_trading_day(),
+                "live": live,
+                **levels,
+            },
+        })
+    except Exception as e:
+        logger.error("Cockpit levels error for %s: %s", ticker, e)
         return jsonify({"success": False, "error": str(e)}), 500
