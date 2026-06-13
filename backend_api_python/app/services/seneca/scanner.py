@@ -235,7 +235,7 @@ def _fetch_float_finviz(ticker: str) -> Optional[int]:
     }
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=4) as r:
             html = r.read().decode("utf-8", errors="ignore")
         # Finviz wraps the value in <b>...</b> after the Float label
         m = re.search(r"Float</div></td>.*?<b>([^<]+)</b>", html, re.DOTALL)
@@ -250,25 +250,21 @@ def _fetch_float_finviz(ticker: str) -> Optional[int]:
 
 
 def _get_float(ticker: str, cache: dict) -> tuple:
-    """Returns (float_shares, is_stale). Checks cache; fetches on miss/stale."""
+    """Returns (float_shares, is_stale). Checks cache; fetches on miss/stale.
+    Caches both found AND not-found results so failed lookups aren't retried
+    every request (avoids repeated 4s Finviz timeouts for unlisted tickers).
+    """
     entry = cache.get(ticker, {})
-    stale = _is_stale(entry)
-
-    if not stale and "float_shares" in entry:
-        return int(entry["float_shares"]), False
+    if not _is_stale(entry) and "float_shares" in entry:
+        shares = int(entry["float_shares"])
+        return shares, shares == 0  # 0 means not found (stale=True)
 
     shares = _fetch_float_finnhub(ticker) or _fetch_float_finviz(ticker)
-    if shares:
-        cache[ticker] = {
-            "float_shares": shares,
-            "fetched_at": date_type.today().isoformat(),
-        }
-        return shares, False
-
-    if "float_shares" in entry:
-        return int(entry["float_shares"]), True
-
-    return 0, True
+    cache[ticker] = {
+        "float_shares": shares or 0,
+        "fetched_at": date_type.today().isoformat(),
+    }
+    return (shares or 0), not shares
 
 
 # ── Parallel float fetch ──────────────────────────────────────────────────────
@@ -305,13 +301,13 @@ def _fetch_floats_parallel(symbols: list, cache: dict) -> dict:
                 logger.debug("Parallel float failed for %s: %s", sym, e)
                 shares = None
 
-            if shares:
-                cache[sym] = {"float_shares": shares, "fetched_at": date_type.today().isoformat()}
-                results[sym] = (shares, False)
-            else:
-                # Fall back to stale cached value if present
-                stale_val = int(cache.get(sym, {}).get("float_shares", 0))
-                results[sym] = (stale_val, True)
+            # Cache both hits and misses — avoids repeated slow fetches for
+            # tickers not listed on Finviz (e.g. OTC/pink-sheet stocks)
+            cache[sym] = {
+                "float_shares": shares or 0,
+                "fetched_at": date_type.today().isoformat(),
+            }
+            results[sym] = (shares or 0, not shares)
 
     return results
 
