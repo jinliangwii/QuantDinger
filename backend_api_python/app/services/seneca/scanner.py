@@ -51,7 +51,7 @@ _FLOAT_CACHE = _CACHE_DIR / "float_cache.json"
 
 # ── Alpaca endpoints ──────────────────────────────────────────────────────────
 _ALPACA_DATA = "https://data.alpaca.markets"
-_TOP_MOVERS_URL = f"{_ALPACA_DATA}/v1beta1/screener/stocks/top-movers"
+_TOP_MOVERS_URL = f"{_ALPACA_DATA}/v1beta1/screener/stocks/movers"
 _MOST_ACTIVES_URL = f"{_ALPACA_DATA}/v1beta1/screener/stocks/most-actives"
 _SNAPSHOTS_URL = f"{_ALPACA_DATA}/v2/stocks/snapshots"
 
@@ -236,7 +236,11 @@ def _fetch_float_finviz(ticker: str) -> Optional[int]:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as r:
             html = r.read().decode("utf-8", errors="ignore")
-        m = re.search(r"Float\s*<[^>]*>([^<]+)<", html)
+        # Finviz wraps the value in <b>...</b> after the Float label
+        m = re.search(r"Float</div></td>.*?<b>([^<]+)</b>", html, re.DOTALL)
+        if not m:
+            # fallback: older Finviz layout
+            m = re.search(r"Float\s*<[^>]*>([^<]+)<", html)
         if m:
             return _parse_si(m.group(1).strip())
     except Exception as e:
@@ -320,18 +324,20 @@ def _live_screen() -> list:
         prev = snap.get("prevDailyBar") or {}
         latest_trade = snap.get("latestTrade") or {}
 
+        # movers includes price; snapshot refines it
         price = float(
-            latest_trade.get("p") or daily.get("c") or g.get("price") or 0
+            latest_trade.get("p") or daily.get("c") or daily.get("o") or g.get("price") or 0
         )
         if not PRICE_MIN <= price <= PRICE_MAX:
             continue
 
-        today_vol = int(daily.get("v") or g.get("volume") or 0)
+        # Volume comes from snapshot — movers endpoint doesn't include it
+        today_vol = int(daily.get("v") or 0)
         if today_vol < PREMARKET_VOL_MIN:
             continue
 
-        prev_vol = float(prev.get("v") or 1)
-        rvol = today_vol / prev_vol if prev_vol > 0 else 1.0
+        prev_vol = float(prev.get("v") or 0)
+        rvol = (today_vol / prev_vol) if prev_vol > 0 else 1.0
         if rvol < RVOL_MIN:
             continue
 
@@ -392,10 +398,15 @@ def _historical_screen(date_str: str) -> list:
     start_window = target - timedelta(days=35)   # 35 calendar days ≈ 25 trading days
     end_window = target + timedelta(days=1)
 
+    # Prefer the dynamic universe (built via universe.py) over the static fallback
+    from app.services.seneca.universe import load_universe
+    dynamic = load_universe()
+    universe = dynamic if dynamic else list(SMALL_CAP_UNIVERSE)
+
     # Batch-fetch daily bars for the full universe
     all_bars: dict = {}
-    for i in range(0, len(SMALL_CAP_UNIVERSE), 50):
-        chunk = list(SMALL_CAP_UNIVERSE)[i : i + 50]
+    for i in range(0, len(universe), 50):
+        chunk = universe[i : i + 50]
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=chunk,
@@ -463,12 +474,14 @@ def _historical_screen(date_str: str) -> list:
     for item in pre_candidates:
         sym = item["sym"]
         float_shares, stale = _get_float(sym, float_cache)
-        if float_shares > 0:
-            float_m = float_shares / 1_000_000
-            if not FLOAT_MIN_M <= float_m <= FLOAT_MAX_M:
-                continue
+        # Historical mode: float is today's snapshot, not the target date's.
+        # Apply as a score weight rather than a hard cut — large-float stocks
+        # score lower; we still surface them so coverage/precision can be measured.
+        # (Precision Killer #2 — see scanner-spec.md)
+        float_for_scoring = float_shares if float_shares > 0 else 5_000_000
 
-        sc, comps = _score(item["gap_pct"], item["rvol"], float_shares or 5_000_000)
+        sc, comps = _score(item["gap_pct"], item["rvol"], float_for_scoring)
+        comps["float_note"] = "historical_soft" if float_shares > FLOAT_MAX_M * 1_000_000 else "ok"
         candidates.append(Candidate(
             ticker=sym,
             gap_pct=item["gap_pct"],
