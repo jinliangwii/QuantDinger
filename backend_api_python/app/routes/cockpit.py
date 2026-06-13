@@ -1,10 +1,11 @@
 """
 Cockpit API routes — Seneca pre-market watchlist surface.
 
-GET /api/cockpit/watchlist                           -> live ranked candidates
-GET /api/cockpit/watchlist/history?date=YYYY-MM-DD  -> historical candidates
-GET /api/cockpit/levels/<ticker>?date=YYYY-MM-DD    -> quick S/R levels (legacy, no chart data)
-GET /api/cockpit/context/<ticker>?date=YYYY-MM-DD   -> full context: candles + levels + bias
+GET /api/cockpit/watchlist                                        -> live ranked candidates
+GET /api/cockpit/watchlist/history?date=YYYY-MM-DD               -> historical candidates
+GET /api/cockpit/movers?top=20                                    -> top gainers/losers/most-actives
+GET /api/cockpit/levels/<ticker>?date=YYYY-MM-DD                 -> quick S/R levels (legacy)
+GET /api/cockpit/context/<ticker>?date=&timeframe=1m|5m|1d       -> candles + levels + bias
 """
 
 from datetime import date, timedelta
@@ -79,6 +80,22 @@ def get_watchlist_history():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@cockpit_blp.route("/movers", methods=["GET"])
+def get_movers():
+    """Live top gainers, losers, and most-actives from Alpaca screener."""
+    try:
+        top = int(request.args.get("top", 20))
+    except ValueError:
+        top = 20
+    try:
+        from app.services.seneca.movers import get_movers as _get_movers
+        data = _get_movers(top=top)
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        logger.error("Cockpit movers error: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @cockpit_blp.route("/levels/<ticker>", methods=["GET"])
 def get_levels(ticker: str):
     """
@@ -128,12 +145,15 @@ def get_context(ticker: str):
     if not ticker:
         return jsonify({"success": False, "error": "ticker required"}), 400
 
-    date_str = (request.args.get("date") or "").strip() or None
+    date_str  = (request.args.get("date")      or "").strip() or None
+    timeframe = (request.args.get("timeframe") or "1m").strip()
+    if timeframe not in ("1m", "5m", "1d"):
+        timeframe = "1m"
     live = date_str is None
 
     try:
         from app.services.seneca.context import get_context as _get_context
-        ctx = _get_context(ticker, date_str=date_str, live=live)
+        ctx = _get_context(ticker, date_str=date_str, live=live, timeframe=timeframe)
         if not ctx:
             return jsonify({
                 "success": False,

@@ -184,9 +184,84 @@ def _bias(price: float, vwap, pdh: float, pdc: float, pdl: float,
             "score": score, "color": color, "reasons": reasons}
 
 
+# ── Daily-chart path ─────────────────────────────────────────────────────────
+
+def _get_context_daily(ticker: str, client, target: datetime) -> dict:
+    """6-month daily bars for the daily chart pane. No VWAP, no pre-market."""
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+    start = target - timedelta(days=185)
+    daily_all = []
+    try:
+        req = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame(1, TimeFrameUnit.Day),
+            start=start,
+            end=target + timedelta(days=1),
+            feed="iex",
+        )
+        daily_all = sorted(
+            client.get_stock_bars(req).data.get(ticker, []),
+            key=lambda b: b.timestamp,
+        )
+    except Exception as e:
+        logger.warning("Daily bars (chart) failed for %s: %s", ticker, e)
+        return {}
+
+    if not daily_all:
+        return {}
+
+    current = float(daily_all[-1].close or 0)
+    prev_bars = daily_all[:-1]
+    pdh = pdc = pdl = swing_h = swing_l = 0.0
+    if prev_bars:
+        prev = prev_bars[-1]
+        pdh, pdc, pdl = float(prev.high), float(prev.close), float(prev.low)
+        swing_h, swing_l = _swing_levels(prev_bars, n=5)
+
+    candles = [
+        {
+            "timestamp": _to_ms(b.timestamp),
+            "open":   round(float(b.open  or 0), 4),
+            "high":   round(float(b.high  or 0), 4),
+            "low":    round(float(b.low   or 0), 4),
+            "close":  round(float(b.close or 0), 4),
+            "volume": int(b.volume or 0),
+            "vwap":   None,
+        }
+        for b in daily_all
+    ]
+
+    levels, structural = [], []
+    def add(lvl):
+        levels.append(lvl); structural.append(lvl["price"])
+    if pdh: add(_level(pdh, "PDH", 1, _side(pdh, current)))
+    if pdc: add(_level(pdc, "PDC", 1, _side(pdc, current), dash=True))
+    if pdl: add(_level(pdl, "PDL", 1, _side(pdl, current)))
+    if swing_h and not _near(swing_h, structural):
+        add(_level(swing_h, "5D High", 2, _side(swing_h, current), dash=True))
+    if swing_l and not _near(swing_l, structural):
+        add(_level(swing_l, "5D Low",  2, _side(swing_l, current), dash=True))
+    levels.extend(_round_dollars(current, structural))
+    levels.sort(key=lambda l: l["price"], reverse=True)
+
+    return {
+        "ticker":          ticker,
+        "date":            target.date().isoformat(),
+        "timeframe":       "1d",
+        "candles":         candles,
+        "levels":          levels,
+        "bias":            _bias(current, None, pdh, pdc, pdl, 0.0, 0.0),
+        "session_open_ms": 0,
+        "current_price":   current,
+    }
+
+
 # ── Public entry ──────────────────────────────────────────────────────────────
 
-def get_context(ticker: str, date_str: Optional[str] = None, live: bool = False) -> dict:
+def get_context(ticker: str, date_str: Optional[str] = None,
+                live: bool = False, timeframe: str = "1m") -> dict:
     try:
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
@@ -216,16 +291,22 @@ def get_context(ticker: str, date_str: Optional[str] = None, live: bool = False)
             logger.error("Invalid date: %s", date_str)
             return {}
 
-    pm_start, session_open = _session_times(target)
-    session_open_ms = _to_ms(session_open)
     client = StockHistoricalDataClient(api_key=api_key, secret_key=secret)
 
-    # ── 1-min intraday bars (4am – end of day) ────────────────────────────────
+    # Daily timeframe takes a completely different path
+    if timeframe == "1d":
+        return _get_context_daily(ticker, client, target)
+
+    tf_minutes = 5 if timeframe == "5m" else 1
+    pm_start, session_open = _session_times(target)
+    session_open_ms = _to_ms(session_open)
+
+    # ── Intraday bars (4am ET – end of day) ───────────────────────────────────
     intraday = []
     try:
         req = StockBarsRequest(
             symbol_or_symbols=ticker,
-            timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+            timeframe=TimeFrame(tf_minutes, TimeFrameUnit.Minute),
             start=pm_start,
             end=target + timedelta(days=1),
             feed="iex",
@@ -325,6 +406,7 @@ def get_context(ticker: str, date_str: Optional[str] = None, live: bool = False)
     return {
         "ticker":          ticker,
         "date":            target.date().isoformat(),
+        "timeframe":       timeframe,
         "candles":         candles,
         "levels":          levels,
         "bias":            _bias(current, latest_vwap, pdh, pdc, pdl, pm_high, pm_low),
