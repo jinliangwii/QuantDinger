@@ -1844,5 +1844,35 @@ def test_connection():
         logger.error(f"Connection test failed: {e}")
         return jsonify({'code': 0, 'msg': f'Test failed: {str(e)}'})
 
+# ── Data source status (public — no auth required) ──────────────────────────
+
+@settings_blp.route('/datasource/status', methods=['GET'])
+def get_datasource_status():
+    """Return the active data source type and whether Polygon is configured."""
+    polygon_configured = bool(os.getenv('POLYGON_API_KEY', '').strip())
+
+    # Check module availability — keys alone aren't enough if the module isn't installed
+    polygon_available = False
+    try:
+        from app.data_sources.us_stock_polygon import PolygonUSStockDataSource  # noqa: F401
+        polygon_available = True
+    except ImportError:
+        pass
+
+    # Determine effective active source (mirrors factory._create_source logic)
+    if polygon_configured and polygon_available:
+        active = 'polygon'
+    else:
+        active = 'yfinance'
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'active': active,
+            'polygon_configured': polygon_configured,
+            'polygon_available': polygon_available,
+        },
+    })
+
 # openapi-compat: legacy import name
 settings_bp = settings_blp

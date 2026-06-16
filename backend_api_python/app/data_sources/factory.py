@@ -25,6 +25,7 @@ _MARKET_ALIASES: Dict[str, str] = {
     "equity": "USStock",
     "equities": "USStock",
     "alpaca": "USStock",
+    "polygon": "USStock",
     "ibkr": "USStock",
     "cnstock": "CNStock",
     "hkstock": "HKStock",
@@ -112,7 +113,7 @@ class DataSourceFactory:
             return cls.get_source("Futures")
         if key in ("forex", "fx", "mt5"):
             return cls.get_source("Forex")
-        if key in ("usstock", "us_stocks", "stock", "stocks", "ibkr", "alpaca"):
+        if key in ("usstock", "us_stocks", "stock", "stocks", "ibkr", "alpaca", "polygon"):
             return cls.get_source("USStock")
         # Unknown alias — log and default to Crypto (legacy behavior). Callers
         # should migrate to the explicit `get_source(market)` API.
@@ -137,6 +138,13 @@ class DataSourceFactory:
             from app.data_sources.hk_stock import HKStockDataSource
             return HKStockDataSource()
         elif market == 'USStock':
+            import os
+            # Prefer Polygon.io when configured (single-source snapshots + bars, pre-market coverage)
+            if os.getenv('POLYGON_API_KEY'):
+                from app.data_sources.us_stock_polygon import PolygonUSStockDataSource
+                logger.info("USStock data source: Polygon.io (POLYGON_API_KEY found)")
+                return PolygonUSStockDataSource()
+            logger.info("USStock data source: yfinance (POLYGON_API_KEY not configured)")
             from app.data_sources.us_stock import USStockDataSource
             return USStockDataSource()
         elif market == 'Forex':

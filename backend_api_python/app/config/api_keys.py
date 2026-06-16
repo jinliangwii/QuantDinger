@@ -8,6 +8,16 @@ class MetaAPIKeys(type):
     """API Keys 元类，用于支持类属性的动态获取"""
     
     @property
+    def POLYGON_API_KEY(cls):
+        """Polygon.io API key for US stock market data"""
+        env_val = os.getenv('POLYGON_API_KEY', '').strip()
+        if env_val:
+            return env_val
+        from app.utils.config_loader import load_addon_config
+        val = load_addon_config().get('polygon', {}).get('api_key')
+        return val if val else ''
+
+    @property
     def FINNHUB_API_KEY(cls):
         from app.utils.config_loader import load_addon_config
         val = load_addon_config().get('finnhub', {}).get('api_key')
