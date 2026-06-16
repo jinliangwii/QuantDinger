@@ -24,6 +24,7 @@ _MARKET_ALIASES: Dict[str, str] = {
     "stocks": "USStock",
     "equity": "USStock",
     "equities": "USStock",
+    "alpaca": "USStock",
     "polygon": "USStock",
     "ibkr": "USStock",
     "cnstock": "CNStock",
@@ -112,7 +113,7 @@ class DataSourceFactory:
             return cls.get_source("Futures")
         if key in ("forex", "fx", "mt5"):
             return cls.get_source("Forex")
-        if key in ("usstock", "us_stocks", "stock", "stocks", "ibkr", "polygon"):
+        if key in ("usstock", "us_stocks", "stock", "stocks", "ibkr", "alpaca", "polygon"):
             return cls.get_source("USStock")
         # Unknown alias — log and default to Crypto (legacy behavior). Callers
         # should migrate to the explicit `get_source(market)` API.
@@ -138,11 +139,22 @@ class DataSourceFactory:
             return HKStockDataSource()
         elif market == 'USStock':
             import os
+            # Prefer Polygon.io when configured (single-source snapshots + bars, pre-market coverage)
             if os.getenv('POLYGON_API_KEY'):
                 from app.data_sources.us_stock_polygon import PolygonUSStockDataSource
-                logger.info("USStock data source: Polygon.io")
+                logger.info("USStock data source: Polygon.io (POLYGON_API_KEY found)")
                 return PolygonUSStockDataSource()
-            logger.info("USStock data source: yfinance (POLYGON_API_KEY not configured)")
+            if os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'):
+                try:
+                    from app.data_sources.us_stock_alpaca import AlpacaUSStockDataSource
+                    logger.info("USStock data source: Alpaca (ALPACA_API_KEY found)")
+                    return AlpacaUSStockDataSource()
+                except ImportError:
+                    logger.warning(
+                        "ALPACA_API_KEY set but us_stock_alpaca not available "
+                        "(seneca/alpaca-bridge not merged) — falling back to yfinance"
+                    )
+            logger.info("USStock data source: yfinance (no cloud API key configured)")
             from app.data_sources.us_stock import USStockDataSource
             return USStockDataSource()
         elif market == 'Forex':

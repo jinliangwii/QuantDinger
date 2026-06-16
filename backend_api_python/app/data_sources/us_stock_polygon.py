@@ -2,7 +2,7 @@
 Polygon.io-backed US stock data source.
 
 For all timeframes Polygon's REST API provides real-time and historical bars
-with pre-market coverage from 4am ET.
+with broader coverage than Alpaca's free IEX feed (pre-market data from 4am ET).
 Daily/weekly bars also served by Polygon for single-source consistency.
 
 Bars are cached as Parquet per (symbol, timeframe) under POLYGON_CACHE_DIR to
