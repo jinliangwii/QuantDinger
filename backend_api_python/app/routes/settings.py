@@ -1844,5 +1844,29 @@ def test_connection():
         logger.error(f"Connection test failed: {e}")
         return jsonify({'code': 0, 'msg': f'Test failed: {str(e)}'})
 
+# ── Data source status (public — no auth required) ──────────────────────────
+
+@settings_blp.route('/datasource/status', methods=['GET'])
+def get_datasource_status():
+    """Return the active data source type and which API keys are configured."""
+    polygon_configured = bool(os.getenv('POLYGON_API_KEY', '').strip())
+    alpaca_configured = bool(
+        os.getenv('ALPACA_API_KEY', '').strip() and os.getenv('ALPACA_SECRET_KEY', '').strip()
+    )
+    if polygon_configured:
+        active = 'polygon'
+    elif alpaca_configured:
+        active = 'alpaca'
+    else:
+        active = 'yfinance'
+    return jsonify({
+        'success': True,
+        'data': {
+            'active': active,
+            'polygon_configured': polygon_configured,
+            'alpaca_configured': alpaca_configured,
+        },
+    })
+
 # openapi-compat: legacy import name
 settings_bp = settings_blp
