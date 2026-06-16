@@ -8,11 +8,16 @@ GET /api/cockpit/levels/<ticker>?date=YYYY-MM-DD                 -> quick S/R le
 GET /api/cockpit/context/<ticker>?date=&timeframe=1m|5m|1d       -> candles + levels + bias
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from flask import jsonify, request
 from app.openapi.blueprint import HumanBlueprint as Blueprint
 from app.utils.logger import get_logger
+
+
+def _utc_now_iso() -> str:
+    """Current UTC time as ISO 8601 string — consumed by frontend to show ET timestamp."""
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _last_trading_day() -> str:
@@ -47,6 +52,7 @@ def get_watchlist():
                 "data_date": _last_trading_day(),
                 "candidates": [c.to_dict() for c in candidates],
                 "count": len(candidates),
+                "fetched_at": _utc_now_iso(),
             },
         })
     except Exception as e:
@@ -73,6 +79,7 @@ def get_watchlist_history():
                 "date": date_str,
                 "candidates": [c.to_dict() for c in candidates],
                 "count": len(candidates),
+                "fetched_at": _utc_now_iso(),
             },
         })
     except Exception as e:
@@ -159,6 +166,7 @@ def get_context(ticker: str):
                 "success": False,
                 "error": f"No context data available for {ticker}",
             }), 404
+        ctx["fetched_at"] = _utc_now_iso()
         return jsonify({"success": True, "data": ctx})
     except Exception as e:
         logger.error("Cockpit context error for %s: %s", ticker, e)

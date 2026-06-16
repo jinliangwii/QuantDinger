@@ -360,6 +360,14 @@ def _live_screen() -> list:
     except Exception as e:
         logger.warning("snapshots fetch failed (continuing without): %s", e)
 
+    # Pre-market detection
+    in_pm = _is_premarket()
+    elapsed_pm = _pm_elapsed_minutes() if in_pm else 390
+    session_start = _today_session_start_utc() if in_pm else None
+
+    if in_pm:
+        logger.info("Pre-market mode: %d min elapsed since 4am ET", elapsed_pm)
+
     # Pass 1 — filter on all non-float criteria, collect survivors
     pre_candidates = []
     for g in gainers:
@@ -382,12 +390,32 @@ def _live_screen() -> list:
         if not PRICE_MIN <= price <= PRICE_MAX:
             continue
 
-        today_vol = int(daily.get("v") or 0)
+        prev_vol = float(prev.get("v") or 0)
+
+        if in_pm:
+            # Only count volume if dailyBar is from today's session
+            # (if the stock hasn't traded yet today, dailyBar is yesterday's — skip)
+            pm_active = False
+            bar_t = daily.get("t", "")
+            if bar_t:
+                try:
+                    bar_dt = datetime.strptime(bar_t, "%Y-%m-%dT%H:%M:%SZ").replace(
+                        tzinfo=timezone.utc)
+                    pm_active = bar_dt >= session_start
+                except Exception:
+                    pass
+            if not pm_active:
+                continue  # not trading pre-market yet today
+            today_vol = int(daily.get("v") or 0)
+            # Normalize RVOL: at this PM rate, what's the full-session equivalent?
+            rvol = (today_vol / elapsed_pm * 390) / prev_vol if prev_vol > 0 else 1.0
+        else:
+            today_vol = int(daily.get("v") or 0)
+            rvol = (today_vol / prev_vol) if prev_vol > 0 else 1.0
+
         if today_vol < PREMARKET_VOL_MIN:
             continue
 
-        prev_vol = float(prev.get("v") or 0)
-        rvol = (today_vol / prev_vol) if prev_vol > 0 else 1.0
         if rvol < RVOL_MIN:
             continue
 
@@ -613,6 +641,37 @@ def _market_is_open() -> bool:
     et_min   = now.minute
     et_total = et_hour * 60 + et_min
     return 9 * 60 + 30 <= et_total < 16 * 60
+
+
+def _is_premarket() -> bool:
+    """True during 4:00–9:29am ET on weekdays."""
+    from datetime import datetime, timezone
+    now = datetime.now(tz=timezone.utc)
+    if now.weekday() >= 5:
+        return False
+    off = -4 if (3 < now.month < 11) else -5
+    et_total = (now.hour + off) * 60 + now.minute
+    return 4 * 60 <= et_total < 9 * 60 + 30
+
+
+def _pm_elapsed_minutes() -> int:
+    """Minutes since 4:00am ET (capped at 330 = 5.5 h of pre-market)."""
+    from datetime import datetime, timezone
+    now = datetime.now(tz=timezone.utc)
+    off = -4 if (3 < now.month < 11) else -5
+    et_total = (now.hour + off) * 60 + now.minute
+    return max(1, min(et_total - 4 * 60, 330))
+
+
+def _today_session_start_utc() -> "datetime":
+    """
+    Alpaca labels the daily bar at 4am UTC (= midnight ET in EDT).
+    Today's session bar will have t >= this timestamp.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(tz=timezone.utc)
+    off = -4 if (3 < now.month < 11) else -5
+    return datetime(now.year, now.month, now.day, -off, 0, tzinfo=timezone.utc)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
