@@ -144,17 +144,7 @@ class DataSourceFactory:
                 from app.data_sources.us_stock_polygon import PolygonUSStockDataSource
                 logger.info("USStock data source: Polygon.io (POLYGON_API_KEY found)")
                 return PolygonUSStockDataSource()
-            if os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY'):
-                try:
-                    from app.data_sources.us_stock_alpaca import AlpacaUSStockDataSource
-                    logger.info("USStock data source: Alpaca (ALPACA_API_KEY found)")
-                    return AlpacaUSStockDataSource()
-                except ImportError:
-                    logger.warning(
-                        "ALPACA_API_KEY set but us_stock_alpaca not available "
-                        "(seneca/alpaca-bridge not merged) — falling back to yfinance"
-                    )
-            logger.info("USStock data source: yfinance (no cloud API key configured)")
+            logger.info("USStock data source: yfinance (POLYGON_API_KEY not configured)")
             from app.data_sources.us_stock import USStockDataSource
             return USStockDataSource()
         elif market == 'Forex':
