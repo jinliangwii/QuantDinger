@@ -1853,18 +1853,37 @@ def get_datasource_status():
     alpaca_configured = bool(
         os.getenv('ALPACA_API_KEY', '').strip() and os.getenv('ALPACA_SECRET_KEY', '').strip()
     )
-    if polygon_configured:
+
+    # Check module availability — keys alone aren't enough if the module isn't installed
+    polygon_available = False
+    alpaca_available = False
+    try:
+        from app.data_sources.us_stock_polygon import PolygonUSStockDataSource  # noqa: F401
+        polygon_available = True
+    except ImportError:
+        pass
+    try:
+        from app.data_sources.us_stock_alpaca import AlpacaUSStockDataSource  # noqa: F401
+        alpaca_available = True
+    except ImportError:
+        pass
+
+    # Determine effective active source (mirrors factory._create_source logic)
+    if polygon_configured and polygon_available:
         active = 'polygon'
-    elif alpaca_configured:
+    elif alpaca_configured and alpaca_available:
         active = 'alpaca'
     else:
         active = 'yfinance'
+
     return jsonify({
         'success': True,
         'data': {
             'active': active,
             'polygon_configured': polygon_configured,
+            'polygon_available': polygon_available,
             'alpaca_configured': alpaca_configured,
+            'alpaca_available': alpaca_available,
         },
     })
 
